@@ -2,22 +2,23 @@
 
 AI-assisted support ticket analytics dashboard built for the Vireo Audio hiring task.
 
-## Objective
+## Overview
 
-The tool analyzes customer-support ticket data to help the Customer Experience team understand:
+This application analyzes customer-support data to help identify:
 
-- Customer Satisfaction (CSAT)
-- Average Handle Time
+- CSAT performance
+- Average handle time
 - Agent-level performance
-- Q3 performance
-- Bottom-ten agents by CSAT
-- Data quality
-- Validation/error rate
-- AI-assisted operational insights
+- Bottom-performing agents
+- Support trends
+- Data-quality issues
+- Potential operational improvement opportunities
+
+The application is built with Python, Streamlit, Pandas and lightweight analytics/AI-assisted components.
 
 ## Tech Stack
 
-- Python
+- Python 3.10+
 - Streamlit
 - Pandas
 - NumPy
@@ -32,13 +33,13 @@ vireo-support-analytics/
 │
 ├── app/
 │   ├── __init__.py
-│   ├── main.py
-│   ├── data_loader.py
-│   ├── analytics.py
 │   ├── ai_analysis.py
-│   ├── validation.py
+│   ├── analytics.py
 │   ├── business_outcome.py
-│   └── demo_data.py
+│   ├── data_loader.py
+│   ├── demo_data.py
+│   ├── main.py
+│   └── validation.py
 │
 ├── data/
 │   └── README.md
@@ -46,6 +47,6 @@ vireo-support-analytics/
 ├── tests/
 │   └── test_analytics.py
 │
+├── .gitignore
 ├── README.md
-├── requirements.txt
-└── .gitignore
+└── requirements.txt
