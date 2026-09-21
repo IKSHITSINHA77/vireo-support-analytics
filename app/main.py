@@ -2,16 +2,22 @@ import streamlit as st
 import pandas as pd
 
 from data_loader import check_data_files, load_all_data
+
 from analytics import (
+    calculate_channel_metrics,
     prepare_tickets,
     calculate_csat,
     calculate_handle_time,
     calculate_agent_metrics,
     get_bottom_agents,
     filter_q3,
+    calculate_sla_breaches,
+    calculate_sla_exposure,
 )
+
 from ai_analysis import generate_insights
 from demo_data import create_demo_data
+
 from validation import (
     validation_summary,
     sample_validation,
@@ -47,7 +53,7 @@ st.caption(
 st.sidebar.header("Dashboard Controls")
 
 demo_mode = st.sidebar.checkbox(
-    "Use synthetic demo data",
+    "Use demo data",
     value=False,
 )
 
@@ -105,25 +111,21 @@ else:
 
     if missing_files:
 
-        st.info(
-            "The dashboard is ready, but the Vireo data "
-            "pack has not been provided yet."
+        st.error(
+            "The dashboard cannot run because required "
+            "Vireo data files are missing."
         )
 
-        st.write("Waiting for:")
+        st.write("Missing files:")
 
         for filename in missing_files:
-
-            st.write(
-                f"- `{filename}`"
-            )
+            st.write(f"- `{filename}`")
 
         st.stop()
 
     data = load_all_data()
 
     tickets = data.get("tickets")
-
     agents = data.get("agents")
 
     if tickets is None:
@@ -145,20 +147,29 @@ tickets = prepare_tickets(
 
 
 # ============================================================
-# Q3 ANALYSIS
+# Q3 2025 ANALYSIS
 # ============================================================
 
 st.divider()
 
-st.subheader("Q3 Analysis")
+st.header("Q3 2025 Performance")
 
+st.caption(
+    "Q3 is defined as July 1–September 30, 2025. "
+    "The provided data ends June 30, 2026, so Q3 2025 "
+    "is the available Q3 period in the supplied data."
+)
+
+
+# ------------------------------------------------------------
+# Filter Q3 2025
+# ------------------------------------------------------------
 
 date_columns = [
     "created_at",
     "opened_at",
     "timestamp",
 ]
-
 
 available_date_column = next(
     (
@@ -177,90 +188,353 @@ if available_date_column:
         errors="coerce",
     )
 
-    valid_dates = tickets[
-        available_date_column
-    ].dropna()
+    q3_tickets = filter_q3(
+        tickets,
+        available_date_column,
+        2025,
+    )
 
-    if not valid_dates.empty:
+else:
 
-        min_year = int(
-            valid_dates.dt.year.min()
-        )
+    q3_tickets = pd.DataFrame()
 
-        max_year = int(
-            valid_dates.dt.year.max()
-        )
 
-        selected_year = st.selectbox(
-            "Select Q3 year",
-            list(
-                range(
-                    min_year,
-                    max_year + 1,
-                )
-            ),
-        )
+# ------------------------------------------------------------
+# Q3 KPI cards
+# ------------------------------------------------------------
 
-        q3_tickets = filter_q3(
-            tickets,
-            available_date_column,
-            selected_year,
-        )
+if q3_tickets.empty:
+
+    st.warning(
+        "No Q3 2025 tickets were found."
+    )
+
+else:
+
+    q3_csat = calculate_csat(
+        q3_tickets
+    )
+
+    q3_handle_time = calculate_handle_time(
+        q3_tickets
+    )
+
+    q3_breaches = calculate_sla_breaches(
+        q3_tickets
+    )
+
+    q3_exposure = calculate_sla_exposure(
+        q3_tickets
+    )
+
+    q3_csat_responses = int(
+        pd.to_numeric(
+            q3_tickets["csat_score"],
+            errors="coerce",
+        ).notna().sum()
+    ) if "csat_score" in q3_tickets.columns else 0
+
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
 
         st.metric(
             "Q3 Tickets",
             f"{len(q3_tickets):,}",
         )
 
-        if not q3_tickets.empty:
+    with col2:
 
-            q3_metrics = calculate_agent_metrics(
-                q3_tickets
-            )
+        st.metric(
+            "Q3 CSAT",
+            (
+                f"{q3_csat:.2f} / 5"
+                if q3_csat is not None
+                else "N/A"
+            ),
+        )
 
-            if not q3_metrics.empty:
+        st.caption(
+            f"{q3_csat_responses:,} survey responses"
+        )
 
-                st.write(
-                    f"Agent-level Q3 analysis for "
-                    f"{selected_year}"
-                )
+    with col3:
 
-                st.dataframe(
-                    get_bottom_agents(
-                        q3_metrics,
-                        n=10,
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+        st.metric(
+            "Average Handle Time",
+            (
+                f"{q3_handle_time / 60:.1f} hrs"
+                if q3_handle_time is not None
+                else "N/A"
+            ),
+        )
 
-            else:
 
-                st.warning(
-                    "Q3 tickets exist, but agent-level "
-                    "metrics could not be calculated."
-                )
+    col4, col5, col6 = st.columns(3)
 
-        else:
+    with col4:
 
-            st.info(
-                "No tickets were found during Q3 "
-                "for the selected year."
-            )
+        st.metric(
+            "SLA Breaches",
+            f"{q3_breaches:,}",
+        )
+
+    with col5:
+
+        st.metric(
+            "SLA-Credit Exposure",
+            f"₹{q3_exposure:,.0f}",
+        )
+
+    with col6:
+
+        q3_breach_rate = (
+            q3_breaches / len(q3_tickets)
+            if len(q3_tickets) > 0
+            else 0
+        )
+
+        st.metric(
+            "SLA Breach Rate",
+            f"{q3_breach_rate:.2%}",
+        )
+
+    st.caption(
+        "SLA-credit exposure is policy-defined exposure "
+        "based on ₹350 per first-response breach; it is "
+        "not presented as confirmed cash loss."
+    )
+
+
+    st.subheader("Channel Performance")
+
+channel_metrics = calculate_channel_metrics(q3_tickets)
+
+if not channel_metrics.empty:
+
+    channel_display = channel_metrics[
+        [
+        "channel",
+        "tickets",
+        "average_csat",
+        "csat_responses",
+        "average_handle_time_minutes",
+        "sla_breaches",
+        "breach_rate",
+        "sla_exposure_inr",
+        ]
+    ].copy()
+
+    channel_display = channel_display.rename(
+        columns={
+            "channel": "Channel",
+            "tickets": "Tickets",
+            "average_csat": "CSAT",
+            "csat_responses": "CSAT Responses",
+            "average_handle_time_minutes": "Avg Handle (min)",
+            "sla_breaches": "SLA Breaches",
+            "breach_rate": "SLA Breach Rate (%)",
+            "sla_exposure_inr": "SLA Exposure (₹)",
+        }
+    )
+
+    channel_display["CSAT"] = channel_display["CSAT"].round(2)
+    channel_display["Avg Handle (min)"] = (
+    channel_display["Avg Handle (min)"].round(1)
+    )
+    channel_display["SLA Breach Rate (%)"] = (
+        channel_display["SLA Breach Rate (%)"].round(2)
+    )
+    channel_display["SLA Exposure (₹)"] = (
+        channel_display["SLA Exposure (₹)"]
+        .fillna(0)
+        .round(0)
+    )
+    
+    if not channel_metrics.empty:
+        st.caption(
+            "Channel SLA breach rates are descriptive. "
+            "They should not be interpreted as causal drivers."
+    )
+
+    st.dataframe(
+        channel_display,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "SLA exposure represents policy-defined SLA-credit exposure "
+        "at ₹350 per first-response breach; it is not confirmed cash loss."
+    )
+
+else:
+    st.info(
+        "No channel-level metrics are available for the selected period."
+    )
+    
+    st.subheader("Refund & Replacement Impact")
+
+if "refund_amount_inr" in q3_tickets.columns:
+    refund_amount = pd.to_numeric(
+        q3_tickets["refund_amount_inr"],
+        errors="coerce",
+    ).fillna(0)
+else:
+    refund_amount = pd.Series(
+        0,
+        index=q3_tickets.index,
+        dtype="float64",
+    )
+
+refund_tickets = int((refund_amount > 0).sum())
+total_refunds = float(refund_amount.sum())
+
+replacement_column = q3_tickets.get(
+    "replacement_issued"
+)
+
+if replacement_column is not None:
+    replacement_issued = int(
+        replacement_column.astype(str)
+        .str.upper()
+        .eq("Y")
+        .sum()
+    )
+else:
+    replacement_issued = 0
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        "Refund Tickets",
+        f"{refund_tickets:,}",
+    )
+
+with col2:
+    st.metric(
+        "Refund Amount",
+        f"₹{total_refunds:,.0f}",
+    )
+
+with col3:
+    st.metric(
+        "Replacements Issued",
+        f"{replacement_issued:,}",
+    )
+
+st.caption(
+    "Refund amounts are taken from the exported ticket data. "
+    "They are separate from the policy-defined SLA-credit exposure."
+)
+
+st.subheader("Business Outcome: SLA Credit Exposure")
+
+q3_sla_breaches = calculate_sla_breaches(q3_tickets)
+q3_sla_exposure = calculate_sla_exposure(q3_tickets)
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.metric(
+        "Q3 SLA Breaches",
+        f"{q3_sla_breaches:,}",
+    )
+
+with col2:
+    st.metric(
+        "Q3 SLA Exposure",
+        f"₹{q3_sla_exposure:,.0f}",
+    )
+
+with col3:
+    if len(q3_tickets) > 0:
+        q3_breach_rate = (
+            q3_sla_breaches
+            / len(q3_tickets)
+            * 100
+        )
+    else:
+        q3_breach_rate = 0
+
+    st.metric(
+        "Q3 Breach Rate",
+        f"{q3_breach_rate:.2f}%",
+    )
+
+st.info(
+    "Business impact: Q3 2025 recorded "
+    f"{q3_sla_breaches:,} first-response SLA breaches, "
+    f"representing ₹{q3_sla_exposure:,.0f} of "
+    "policy-defined SLA-credit exposure. "
+    "This is an exposure measure under the support policy, "
+    "not confirmed cash loss."
+)
+   
+# ============================================================
+# Q3 AGENT PERFORMANCE
+# ============================================================
+
+if not q3_tickets.empty:
+
+    st.divider()
+
+    st.header("Q3 2025 Agent Performance")
+
+    st.caption(
+        "Primary training view: Tier 1 agents with at least "
+        "3 CSAT responses. Tier 2 agents are excluded from "
+        "Tier 1 volume/CSAT comparisons."
+    )
+
+    q3_metrics = calculate_agent_metrics(
+        q3_tickets,
+        agents,
+    )
+
+
+    if q3_metrics.empty:
+
+        st.warning(
+            "Q3 tickets exist, but agent-level metrics "
+            "could not be calculated."
+        )
 
     else:
 
-        st.info(
-            "The available date column contains "
-            "no valid dates."
+        st.subheader(
+            "Bottom 10 Qualified Tier 1 Agents"
         )
 
-else:
+        bottom_agents = get_bottom_agents(
+            q3_metrics,
+            n=10,
+            tier=1,
+            min_csat_responses=3,
+        )
 
-    st.info(
-        "No recognized ticket date column is available "
-        "for Q3 analysis."
-    )
+        if bottom_agents.empty:
+
+            st.info(
+                "No Tier 1 agents met the minimum "
+                "CSAT-response threshold."
+            )
+
+        else:
+
+            st.dataframe(
+                bottom_agents,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.caption(
+            "Minimum sample rule: ≥3 CSAT responses per agent. "
+            "This threshold is an analytical guardrail rather "
+            "than a Vireo policy requirement."
+        )
 
 
 # ============================================================
@@ -269,12 +543,12 @@ else:
 
 st.divider()
 
-st.subheader("Support Overview")
+st.header("Support Overview")
 
-col1, col2, col3 = st.columns(3)
+overall_col1, overall_col2, overall_col3 = st.columns(3)
 
 
-with col1:
+with overall_col1:
 
     st.metric(
         "Total Tickets",
@@ -282,58 +556,87 @@ with col1:
     )
 
 
-with col2:
+with overall_col2:
 
-    csat = calculate_csat(
+    overall_csat = calculate_csat(
         tickets
     )
 
-    if csat is not None:
-
-        st.metric(
-            "Average CSAT",
-            f"{csat:.2f}",
-        )
-
-    else:
-
-        st.metric(
-            "Average CSAT",
-            "N/A",
-        )
+    st.metric(
+        "Average CSAT",
+        (
+            f"{overall_csat:.2f} / 5"
+            if overall_csat is not None
+            else "N/A"
+        ),
+    )
 
 
-with col3:
+with overall_col3:
 
-    handle_time = calculate_handle_time(
+    overall_handle_time = calculate_handle_time(
         tickets
     )
 
-    if handle_time is not None:
-
-        st.metric(
-            "Average Handle Time",
-            f"{handle_time:.2f}",
-        )
-
-    else:
-
-        st.metric(
-            "Average Handle Time",
-            "N/A",
-        )
+    st.metric(
+        "Average Handle Time",
+        (
+            f"{overall_handle_time / 60:.1f} hrs"
+            if overall_handle_time is not None
+            else "N/A"
+        ),
+    )
 
 
 # ============================================================
-# AGENT PERFORMANCE
+# OVERALL SLA PERFORMANCE
+# ============================================================
+
+st.subheader("SLA Performance")
+
+overall_breaches = calculate_sla_breaches(
+    tickets
+)
+
+overall_exposure = calculate_sla_exposure(
+    tickets
+)
+
+sla_col1, sla_col2 = st.columns(2)
+
+
+with sla_col1:
+
+    st.metric(
+        "First-Response SLA Breaches",
+        f"{overall_breaches:,}",
+    )
+
+
+with sla_col2:
+
+    st.metric(
+        "Policy-Defined SLA Exposure",
+        f"₹{overall_exposure:,.0f}",
+    )
+
+st.caption(
+    "Exposure uses the support-policy first-response "
+    "credit of ₹350 per breach."
+)
+
+
+# ============================================================
+# OVERALL AGENT PERFORMANCE
 # ============================================================
 
 st.divider()
 
-st.subheader("Agent Performance")
+st.header("Agent Performance")
 
 agent_metrics = calculate_agent_metrics(
-    tickets
+    tickets,
+    agents,
 )
 
 
@@ -354,7 +657,7 @@ else:
 
 
 # ============================================================
-# BOTTOM 10 AGENTS
+# OVERALL BOTTOM 10
 # ============================================================
 
 if not agent_metrics.empty:
@@ -362,18 +665,34 @@ if not agent_metrics.empty:
     st.divider()
 
     st.subheader(
-        "Bottom 10 Agents by CSAT"
+        "Bottom 10 Qualified Tier 1 Agents"
     )
 
-    bottom_agents = get_bottom_agents(
+    overall_bottom_agents = get_bottom_agents(
         agent_metrics,
         n=10,
+        tier=1,
+        min_csat_responses=3,
     )
 
-    st.dataframe(
-        bottom_agents,
-        use_container_width=True,
-        hide_index=True,
+    if overall_bottom_agents.empty:
+
+        st.info(
+            "No Tier 1 agents met the minimum "
+            "CSAT-response threshold."
+        )
+
+    else:
+
+        st.dataframe(
+            overall_bottom_agents,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.caption(
+        "Tier 2 agents are excluded. Primary ranking "
+        "requires at least 3 CSAT responses."
     )
 
 
@@ -385,7 +704,7 @@ if not agent_metrics.empty:
 
     st.divider()
 
-    st.subheader(
+    st.header(
         "AI-Assisted Insights"
     )
 
@@ -402,12 +721,12 @@ if not agent_metrics.empty:
 
 
 # ============================================================
-# DATA QUALITY
+# DATA QUALITY & VALIDATION
 # ============================================================
 
 st.divider()
 
-st.subheader(
+st.header(
     "Data Quality & Validation"
 )
 
@@ -462,13 +781,74 @@ st.write(
 )
 
 st.write(
-    f"Rows containing at least one missing value: "
+    f"Invalid sampled rows: "
     f"{sample['invalid_rows']}"
 )
 
 st.write(
-    f"Sample error rate: "
+    f"Validation error rate: "
     f"{sample['error_rate']:.2%}"
+)
+
+
+# ------------------------------------------------------------
+# Validation checks
+# ------------------------------------------------------------
+
+if "checks" in sample:
+
+    with st.expander(
+        "Validation checks"
+    ):
+
+        validation_labels = {
+            "invalid_channels":
+                "Invalid channel values",
+
+            "invalid_statuses":
+                "Invalid status values",
+
+            "invalid_csat":
+                "CSAT values outside 1–5",
+
+            "invalid_timestamp_order":
+                "Resolution before first response",
+
+            "negative_handle_time":
+                "Negative handle times",
+
+            "invalid_sla_mapping":
+                "Invalid SLA target mapping",
+
+            "missing_agent_id":
+                "Missing agent IDs",
+        }
+
+        for key, label in validation_labels.items():
+
+            count = sample["checks"].get(
+                key,
+                0,
+            )
+
+            if count == 0:
+
+                st.write(
+                    f"✓ {label}: 0"
+                )
+
+            else:
+
+                st.write(
+                    f"⚠ {label}: {count}"
+                )
+
+
+st.caption(
+    "Missing cells are reported separately because some "
+    "Vireo fields legitimately allow blanks, such as "
+    "CSAT for customers who did not respond and order IDs "
+    "when customers did not quote an order."
 )
 
 
@@ -481,14 +861,13 @@ st.divider()
 if demo_mode:
 
     st.warning(
-        "⚠ DEMO DATA: All displayed metrics are "
-        "synthetic and must not be presented as "
-        "actual Vireo Audio results."
+        "⚠ DEMO DATA: All displayed metrics are synthetic "
+        "and must not be presented as actual Vireo Audio results."
     )
 
 else:
 
     st.success(
-        "✓ Metrics shown above are calculated "
-        "from the provided Vireo data pack."
+        "✓ Metrics shown above are calculated from the "
+        "provided Vireo data pack."
     )

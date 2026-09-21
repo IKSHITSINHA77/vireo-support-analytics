@@ -1,95 +1,125 @@
 import pandas as pd
 
 
-def generate_insights(
-    tickets: pd.DataFrame,
-    agent_metrics: pd.DataFrame,
-):
+def generate_insights(tickets: pd.DataFrame, agent_metrics: pd.DataFrame):
     """
-    Generate deterministic AI-assisted business insights
-    from calculated metrics.
+    Generate deterministic AI-assisted operational insights.
 
-    No external API is required.
+    Numerical calculations remain deterministic and reproducible.
+    This layer converts calculated metrics into concise business insights.
     """
 
     insights = []
 
-    if tickets.empty:
-        return [
-            "No ticket records are available for analysis."
-        ]
+    # ---------------------------------------------------------
+    # Overall CSAT
+    # ---------------------------------------------------------
 
-    total_tickets = len(tickets)
+    if "csat_score" in tickets.columns:
+        csat_values = pd.to_numeric(
+            tickets["csat_score"],
+            errors="coerce",
+        ).dropna()
 
-    insights.append(
-        f"The dataset contains {total_tickets:,} support tickets."
-    )
-
-    if "average_csat" in agent_metrics.columns:
-
-        csat = agent_metrics["average_csat"].dropna()
-
-        if not csat.empty:
-
-            overall_csat = csat.mean()
+        if not csat_values.empty:
+            overall_csat = csat_values.mean()
 
             insights.append(
-                f"Average agent-level CSAT is "
-                f"{overall_csat:.2f}."
+                f"Overall CSAT is {overall_csat:.2f}/5 "
+                f"across {len(csat_values):,} survey responses."
             )
 
-            lowest = csat.min()
+    # ---------------------------------------------------------
+    # Handle time
+    # ---------------------------------------------------------
+
+    if "handle_time_minutes" in tickets.columns:
+        handle_values = pd.to_numeric(
+            tickets["handle_time_minutes"],
+            errors="coerce",
+        ).dropna()
+
+        if not handle_values.empty:
+            average_handle = handle_values.mean()
 
             insights.append(
-                f"The lowest observed agent-level CSAT "
-                f"is {lowest:.2f}."
+                f"Average handle time is "
+                f"{average_handle / 60:.1f} hours."
             )
 
-    if "average_handle_time" in agent_metrics.columns:
+    # ---------------------------------------------------------
+    # SLA breaches
+    # ---------------------------------------------------------
 
-        handle = (
-            agent_metrics[
-                "average_handle_time"
-            ]
-            .dropna()
+    if "sla_breach" in tickets.columns:
+
+        breaches = int(
+            tickets["sla_breach"]
+            .fillna(False)
+            .astype(bool)
+            .sum()
         )
 
-        if not handle.empty:
+        if breaches > 0:
+
+            exposure = breaches * 350
 
             insights.append(
-                f"Average handle time across available "
-                f"agent records is {handle.mean():.2f}."
+                f"{breaches:,} tickets breached the first-response "
+                f"SLA, representing ₹{exposure:,.0f} of "
+                f"policy-defined SLA-credit exposure."
             )
 
-            highest = handle.max()
+    # ---------------------------------------------------------
+    # Bottom agents
+    # ---------------------------------------------------------
 
-            insights.append(
-                f"The highest observed agent-level "
-                f"handle time is {highest:.2f}."
-            )
+    if not agent_metrics.empty and "average_csat" in agent_metrics.columns:
 
-    if "average_csat" in agent_metrics.columns:
-
-        valid = agent_metrics.dropna(
+        bottom = agent_metrics.dropna(
             subset=["average_csat"]
+        ).sort_values(
+            "average_csat",
+            ascending=True,
         )
 
-        if len(valid) >= 3:
+        # Only use agents with a meaningful CSAT sample.
+        if "csat_responses" in bottom.columns:
+            bottom = bottom[
+                bottom["csat_responses"] >= 3
+            ]
 
-            bottom = valid.nsmallest(
-                min(3, len(valid)),
-                "average_csat",
+        if not bottom.empty:
+
+            agent_identifier = (
+                "agent_id"
+                if "agent_id" in bottom.columns
+                else "agent"
+                if "agent" in bottom.columns
+                else None
             )
 
-            agents = ", ".join(
-                bottom["agent"]
-                .astype(str)
-                .tolist()
-            )
+            if agent_identifier:
 
-            insights.append(
-                "Agents requiring closer review based "
-                f"on lowest CSAT include: {agents}."
-            )
+                worst = bottom.iloc[0]
+
+                agent_name = worst[agent_identifier]
+
+                insights.append(
+                    f"The lowest-CSAT Tier 1 agent in the "
+                    f"qualified sample is {agent_name}, with "
+                    f"CSAT of {worst['average_csat']:.2f}/5."
+                )
+
+    # ---------------------------------------------------------
+    # Fallback
+    # ---------------------------------------------------------
+
+    if not insights:
+
+        insights.append(
+            "No sufficient metrics were available to generate "
+            "operational insights."
+        )
 
     return insights
